@@ -67,6 +67,17 @@ Environment:
 | `HOST`              | `127.0.0.1`          | bind address — keep loopback, expose via tunnel |
 | `WACLI_BIN`         | `./bin/wacli`        | wacli binary                 |
 | `WACLI_ME_TENANTS`  | `./config/tenants.json` | tenant file               |
+| `WACLI_SYNC_MODE`   | `on-request`         | `on-request` or `continuous` |
+| `WACLI_SYNC_IDLE_MS`| `5000`               | idle time in milliseconds before on-request sync disconnects |
+
+For a personal WhatsApp number, the default `on-request` mode avoids keeping
+the linked device connected between MCP tool calls. A tool call starts a quiet
+sync when needed, waits up to 90 seconds for WhatsApp's offline sync to finish,
+and keeps the connection briefly after the last call before disconnecting.
+This can make calls take longer, especially the first call after a pause. Quiet
+presence may help the primary phone keep receiving push notifications, but
+WhatsApp controls notification routing, so this cannot be guaranteed. Set
+`WACLI_SYNC_MODE=continuous` to keep syncing in the background instead.
 
 ## Linking an account
 

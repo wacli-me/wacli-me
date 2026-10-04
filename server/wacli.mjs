@@ -5,6 +5,11 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+const STORE_LOCK_RETRY_DELAYS_MS = [100, 250, 500, 1_000];
+
+function isStoreLockContention(stderr) {
+  return /store (?:is )?locked.*resource temporarily unavailable/i.test(stderr);
+}
 
 export class WacliError extends Error {
   constructor(message, { exitCode, stderr } = {}) {
@@ -31,23 +36,40 @@ export class Wacli {
     if (readOnly) argv.push("--read-only");
     argv.push(...args);
 
-    try {
-      const { stdout } = await execFileAsync(this.bin, argv, {
-        timeout: this.timeoutMs,
-        maxBuffer: MAX_OUTPUT_BYTES,
-        env: {
-          PATH: process.env.PATH,
-          HOME: process.env.HOME,
-          WACLI_STORE_DIR: this.store,
-          WACLI_DEVICE_LABEL: process.env.WACLI_DEVICE_LABEL || "wacli.me",
-          WACLI_DEVICE_PLATFORM: process.env.WACLI_DEVICE_PLATFORM || "DESKTOP",
-        },
-      });
-      return stdout;
-    } catch (err) {
-      const stderr = (err.stderr || "").toString().trim();
-      const firstLine = stderr.split("\n").filter(Boolean).pop() || err.message;
-      throw new WacliError(firstLine, { exitCode: err.code, stderr });
+    const deadline = Date.now() + this.timeoutMs;
+    let retry = 0;
+    while (true) {
+      try {
+        const { stdout } = await execFileAsync(this.bin, argv, {
+          timeout: Math.max(1, deadline - Date.now()),
+          maxBuffer: MAX_OUTPUT_BYTES,
+          env: {
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            WACLI_STORE_DIR: this.store,
+            WACLI_DEVICE_LABEL: process.env.WACLI_DEVICE_LABEL || "wacli.me",
+            WACLI_DEVICE_PLATFORM: process.env.WACLI_DEVICE_PLATFORM || "DESKTOP",
+          },
+        });
+        return stdout;
+      } catch (err) {
+        const stderr = (err.stderr || "").toString().trim();
+        const delay = STORE_LOCK_RETRY_DELAYS_MS[retry];
+        if (
+          !isStoreLockContention(stderr) ||
+          delay === undefined ||
+          Date.now() + delay >= deadline
+        ) {
+          const firstLine = stderr.split("\n").filter(Boolean).pop() || err.message;
+          throw new WacliError(firstLine, { exitCode: err.code, stderr });
+        }
+
+        // A transient store lock can happen while the request-scoped sync
+        // process is finishing its delegate setup. Re-run only after wacli
+        // failed to acquire the lock, so the command has not taken effect.
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        retry += 1;
+      }
     }
   }
 

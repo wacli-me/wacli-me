@@ -534,13 +534,21 @@ async function handlePaddleWebhook(req, res) {
   );
   sendJson(res, 200, { ok: true });
 }
-const sync = new SyncManager({ wacliBin: WACLI_BIN, logDir: path.join(root, "logs") });
+const syncMode = process.env.WACLI_SYNC_MODE === "continuous" ? "continuous" : "on-request";
+const configuredSyncIdleMs = Number.parseInt(process.env.WACLI_SYNC_IDLE_MS || "5000", 10);
+const sync = new SyncManager({
+  wacliBin: WACLI_BIN,
+  logDir: path.join(root, "logs"),
+  mode: syncMode,
+  idleMs: configuredSyncIdleMs,
+});
 
 const connect = new ConnectManager({
   wacliBin: WACLI_BIN,
   storesDir: STORES_DIR,
   tenantsFile: TENANTS_FILE,
   onLinked: (session) => sync.ensure(session.store),
+  followAfterLink: sync.mode === "continuous",
 });
 
 async function handleConnectStart(req, res) {
@@ -1059,6 +1067,17 @@ async function handleMcp(req, res) {
     usage.touch(tenant.id);
   }
 
+  let releaseSync = () => {};
+  if (isToolCall) {
+    try {
+      releaseSync = await sync.acquireForRequest(tenant.store);
+    } catch (err) {
+      console.error(`[sync] request startup failed for ${tenant.id}: ${err.message}`);
+      rpcError(res, 503, -32002, "WhatsApp could not be reached. Please retry the request.");
+      return;
+    }
+  }
+
   // Stateless: a fresh server + transport per request, so tenants never share state.
   const server = buildServer(tenant);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -1067,8 +1086,12 @@ async function handleMcp(req, res) {
     server.close().catch(() => {});
   });
 
-  await server.connect(transport);
-  await transport.handleRequest(req, res, parsedBody);
+  try {
+    await server.connect(transport);
+    await transport.handleRequest(req, res, parsedBody);
+  } finally {
+    releaseSync();
+  }
 }
 
 function route(req, res) {
@@ -1275,6 +1298,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     // would hand people free requests every deploy.
     usage.flush();
     retention.stop();
+    sync.stopAll();
     httpServer.close(() => process.exit(0));
   });
 }
