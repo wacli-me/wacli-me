@@ -21,6 +21,14 @@ export const PLANS = {
     // have an address. Also what Article 5(1)(e) asks for.
     idleDays: 14,
   },
+  "self-hosted": {
+    id: "self-hosted",
+    label: "Self-hosted",
+    requestsPerMonth: Infinity,
+    // The operator owns the store and is responsible for its retention.
+    historyDays: null,
+    idleDays: null,
+  },
   pro: {
     id: "pro",
     label: "Pro",
@@ -30,15 +38,17 @@ export const PLANS = {
   },
 };
 
-// A paid plan carries the date the paid period runs to. Past that date the
+// A Pro grant carries the date the paid period runs to. Past that date the
 // account falls back to free on its own, so a missed cancellation webhook can
 // never leave someone on Pro forever — the grant expires rather than needing
-// to be revoked.
+// to be revoked. Self-hosted tenants are controlled by the local operator.
 export function planFor(tenant) {
   if (!tenant) return PLANS.free;
   const plan = PLANS[tenant.plan];
   if (!plan || plan.id === "free") return PLANS.free;
-  if (tenant.planUntil && Date.parse(tenant.planUntil) < Date.now()) return PLANS.free;
+  if (plan.id === "pro" && tenant.planUntil && Date.parse(tenant.planUntil) < Date.now()) {
+    return PLANS.free;
+  }
   return plan;
 }
 

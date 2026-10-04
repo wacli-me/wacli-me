@@ -39,7 +39,7 @@ scripts/     start/stop/tunnel helpers
 ```json
 {
   "tenants": [
-    { "id": "demo", "token": "<32 random bytes, hex>", "store": "/Users/<user>/wacli-me/stores/demo", "allowSend": false }
+    { "id": "demo", "token": "<32 random bytes, hex>", "store": "/Users/<user>/wacli-me/stores/demo", "plan": "self-hosted", "allowSend": false }
   ]
 }
 ```
@@ -50,6 +50,16 @@ other's data. `allowSend` is what registers the `send_message` tool at all; leav
 the account owner explicitly asked for write access.
 
 Generate a token with `openssl rand -hex 32`.
+
+For a server you operate yourself, use `"plan": "self-hosted"` as in the
+example. It has no monthly tool-call limit and does not prune message history
+or delete an inactive tenant; you are responsible for store retention and
+backups. Tenants created through `/connect` can inherit a server-wide plan:
+set `WACLI_ME_DEFAULT_PLAN=self-hosted` to make that the default on a private
+host. An explicit valid `plan` in `tenants.json` takes precedence. If neither
+is set, the server uses Free: 50 tool calls per UTC month, 30 days of history,
+and deletion after 14 days of inactivity. Pro is the paid hosted plan and is
+not needed for self-hosting.
 
 ## Running
 
@@ -67,6 +77,7 @@ Environment:
 | `HOST`              | `127.0.0.1`          | bind address — keep loopback, expose via tunnel |
 | `WACLI_BIN`         | `./bin/wacli`        | wacli binary                 |
 | `WACLI_ME_TENANTS`  | `./config/tenants.json` | tenant file               |
+| `WACLI_ME_DEFAULT_PLAN` | `free`           | `free` or `self-hosted` for tenants without a valid plan |
 
 ## Linking an account
 

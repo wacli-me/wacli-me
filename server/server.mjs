@@ -28,6 +28,9 @@ const TENANTS_FILE = process.env.WACLI_ME_TENANTS || path.join(root, "config", "
 const WEB_DIR = path.join(root, "web");
 const PROVIDER_FILE = process.env.WACLI_ME_PROVIDER || path.join(root, "config", "provider.json");
 const USAGE_FILE = process.env.WACLI_ME_USAGE || path.join(root, "config", "usage.json");
+const DEFAULT_TENANT_PLAN = process.env.WACLI_ME_DEFAULT_PLAN === "self-hosted"
+  ? "self-hosted"
+  : "free";
 const PADDLE_KEY_FILE = path.join(root, "config", "paddle-api-key.txt");
 const PADDLE_WEBHOOK_FILE = path.join(root, "config", "paddle-webhook-secret.txt");
 const PADDLE_CLIENT_TOKEN_FILE = path.join(root, "config", "paddle-client-token.txt");
@@ -58,7 +61,7 @@ function loadTenants() {
     token: t.token,
     store: t.store,
     allowSend: t.allowSend === true,
-    plan: PLANS[t.plan] ? t.plan : "free",
+    plan: PLANS[t.plan] ? t.plan : DEFAULT_TENANT_PLAN,
     planUntil: t.planUntil || null,
   }));
 }
