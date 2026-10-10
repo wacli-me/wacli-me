@@ -17,6 +17,7 @@ import { Provider, FIELDS, esc, substitute, missingForImprint } from "./provider
 import { PLANS, planFor, Usage } from "./plans.mjs";
 import { Paddle, planChangeFrom } from "./paddle.mjs";
 import { Retention } from "./retention.mjs";
+import { MAX_IMAGE_INPUT_CHARS, decodeImageInput, downloadImageFromUrl } from "./images.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -28,6 +29,9 @@ const TENANTS_FILE = process.env.WACLI_ME_TENANTS || path.join(root, "config", "
 const WEB_DIR = path.join(root, "web");
 const PROVIDER_FILE = process.env.WACLI_ME_PROVIDER || path.join(root, "config", "provider.json");
 const USAGE_FILE = process.env.WACLI_ME_USAGE || path.join(root, "config", "usage.json");
+const DEFAULT_TENANT_PLAN = process.env.WACLI_ME_DEFAULT_PLAN === "self-hosted"
+  ? "self-hosted"
+  : "free";
 const PADDLE_KEY_FILE = path.join(root, "config", "paddle-api-key.txt");
 const PADDLE_WEBHOOK_FILE = path.join(root, "config", "paddle-webhook-secret.txt");
 const PADDLE_CLIENT_TOKEN_FILE = path.join(root, "config", "paddle-client-token.txt");
@@ -39,6 +43,7 @@ const REGISTRY_AUTH_FILE = path.join(root, "config", "mcp-registry-auth.txt");
 const STORES_DIR = process.env.WACLI_ME_STORES || path.join(root, "stores");
 const ISSUER = process.env.WACLI_ME_ISSUER || "https://wacli.me";
 const MAX_BODY_BYTES = 1024 * 1024;
+const MAX_MCP_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_INLINE_MEDIA_BYTES = 5 * 1024 * 1024;
 
 const SERVER_NAME = "wacli-me";
@@ -58,7 +63,7 @@ function loadTenants() {
     token: t.token,
     store: t.store,
     allowSend: t.allowSend === true,
-    plan: PLANS[t.plan] ? t.plan : "free",
+    plan: PLANS[t.plan] ? t.plan : DEFAULT_TENANT_PLAN,
     planUntil: t.planUntil || null,
   }));
 }
@@ -390,9 +395,73 @@ function buildServer(tenant) {
             .describe("Recipient JID, phone number in international format, or exact chat name."),
           message: z.string().min(1).describe("Message text."),
         },
-        annotations: { destructiveHint: false, openWorldHint: true, readOnlyHint: false },
+        annotations: { destructiveHint: true, openWorldHint: true, readOnlyHint: false },
       },
       (args) => guard(() => wacli.sendText(args)),
+    );
+
+    server.registerTool(
+      "send_image",
+      {
+        title: "Send an image on WhatsApp",
+        description:
+          "Send a JPEG, PNG, WebP, or GIF image (up to 5 MB) from base64 data or a public HTTPS image URL. " +
+          "For base64, pass raw bytes plus mime_type or a data:image/...;base64 URL. This is irreversible — confirm recipient and image with the user first.",
+        inputSchema: {
+          to: z
+            .string()
+            .min(1)
+            .describe("Recipient JID, phone number in international format, or exact chat name."),
+          image_base64: z
+            .string()
+            .min(1)
+            .max(MAX_IMAGE_INPUT_CHARS)
+            .optional()
+            .describe("Base64 image bytes, optionally as a data:image/...;base64 URL. Provide exactly one of image_base64 and image_url."),
+          image_url: z
+            .string()
+            .url()
+            .max(2048)
+            .optional()
+            .describe("Public HTTPS URL of the image. Provide exactly one of image_base64 and image_url."),
+          mime_type: z
+            .enum(["image/jpeg", "image/png", "image/webp", "image/gif"])
+            .optional()
+            .describe("Required for raw base64; inferred from a data URL when present."),
+          caption: z.string().max(1024).optional().describe("Optional caption, up to 1024 characters."),
+        },
+        annotations: { destructiveHint: true, openWorldHint: true, readOnlyHint: false },
+      },
+      async (args) => {
+        let image;
+        try {
+          if (Boolean(args.image_base64) === Boolean(args.image_url)) {
+            throw new Error("Provide exactly one of image_base64 or image_url.");
+          }
+          image = args.image_url
+            ? await downloadImageFromUrl(args.image_url, args.mime_type)
+            : decodeImageInput(args.image_base64, args.mime_type);
+        } catch (err) {
+          return asToolError(err.message);
+        }
+
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wacli-send-image-"));
+        try {
+          const file = path.join(dir, `image${image.extension}`);
+          fs.writeFileSync(file, image.bytes, { mode: 0o600, flag: "wx" });
+          return asToolResult(await wacli.sendImage({
+            to: args.to,
+            file,
+            mimeType: image.mimeType,
+            caption: args.caption,
+          }));
+        } catch (err) {
+          if (err instanceof WacliError) return asToolError(`wacli: ${err.message}`);
+          throw err;
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
     );
 
     server.registerTool(
@@ -534,13 +603,21 @@ async function handlePaddleWebhook(req, res) {
   );
   sendJson(res, 200, { ok: true });
 }
-const sync = new SyncManager({ wacliBin: WACLI_BIN, logDir: path.join(root, "logs") });
+const syncMode = process.env.WACLI_SYNC_MODE === "continuous" ? "continuous" : "on-request";
+const configuredSyncIdleMs = Number.parseInt(process.env.WACLI_SYNC_IDLE_MS || "5000", 10);
+const sync = new SyncManager({
+  wacliBin: WACLI_BIN,
+  logDir: path.join(root, "logs"),
+  mode: syncMode,
+  idleMs: configuredSyncIdleMs,
+});
 
 const connect = new ConnectManager({
   wacliBin: WACLI_BIN,
   storesDir: STORES_DIR,
   tenantsFile: TENANTS_FILE,
   onLinked: (session) => sync.ensure(session.store),
+  followAfterLink: sync.mode === "continuous",
 });
 
 async function handleConnectStart(req, res) {
@@ -893,13 +970,13 @@ async function handleConnectFinish(req, res) {
 
 // ------------------------------------------------------------------- http ---
 
-function readBody(req) {
+function readBody(req, maxBytes = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on("data", (chunk) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBytes) {
         reject(new Error("request body too large"));
         req.destroy();
         return;
@@ -1029,7 +1106,7 @@ async function handleMcp(req, res) {
 
   let parsedBody;
   if (req.method === "POST") {
-    const raw = await readBody(req);
+    const raw = await readBody(req, MAX_MCP_BODY_BYTES);
     try {
       parsedBody = raw ? JSON.parse(raw) : undefined;
     } catch {
@@ -1059,6 +1136,17 @@ async function handleMcp(req, res) {
     usage.touch(tenant.id);
   }
 
+  let releaseSync = () => {};
+  if (isToolCall) {
+    try {
+      releaseSync = await sync.acquireForRequest(tenant.store);
+    } catch (err) {
+      console.error(`[sync] request startup failed for ${tenant.id}: ${err.message}`);
+      rpcError(res, 503, -32002, "WhatsApp could not be reached. Please retry the request.");
+      return;
+    }
+  }
+
   // Stateless: a fresh server + transport per request, so tenants never share state.
   const server = buildServer(tenant);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -1067,8 +1155,12 @@ async function handleMcp(req, res) {
     server.close().catch(() => {});
   });
 
-  await server.connect(transport);
-  await transport.handleRequest(req, res, parsedBody);
+  try {
+    await server.connect(transport);
+    await transport.handleRequest(req, res, parsedBody);
+  } finally {
+    releaseSync();
+  }
 }
 
 function route(req, res) {
@@ -1275,6 +1367,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     // would hand people free requests every deploy.
     usage.flush();
     retention.stop();
+    sync.stopAll();
     httpServer.close(() => process.exit(0));
   });
 }

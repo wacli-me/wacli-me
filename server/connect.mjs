@@ -18,11 +18,12 @@ export const DPA_VERSION = "1.0";
 const MAX_ACTIVE_SESSIONS = 3; // one machine, one CPU — do not spawn a crowd
 
 export class ConnectManager {
-  constructor({ wacliBin, storesDir, tenantsFile, onLinked }) {
+  constructor({ wacliBin, storesDir, tenantsFile, onLinked, followAfterLink = true }) {
     this.wacliBin = wacliBin;
     this.storesDir = storesDir;
     this.tenantsFile = tenantsFile;
     this.onLinked = onLinked || (() => {});
+    this.followAfterLink = followAfterLink;
     this.sessions = new Map();
   }
 
@@ -41,7 +42,12 @@ export class ConnectManager {
     const store = path.join(this.storesDir, `u-${id}`);
     fs.mkdirSync(store, { recursive: true, mode: 0o700 });
 
-    const proc = spawn(this.wacliBin, ["auth", "--events", "--follow", "--store", store], {
+    const authArgs = ["auth", "--events"];
+    if (this.followAfterLink) authArgs.push("--follow");
+    else authArgs.push("--idle-exit", "3s");
+    authArgs.push("--store", store);
+
+    const proc = spawn(this.wacliBin, authArgs, {
       env: {
         PATH: process.env.PATH,
         HOME: process.env.HOME,
@@ -216,12 +222,14 @@ export class ConnectManager {
 
     this.#emit(session);
 
-    // Hand the store over to a supervised sync daemon, then let the short-lived
-    // auth process go — otherwise history freezes at whatever linking fetched.
-    setTimeout(() => {
-      session.proc.kill();
-      this.onLinked(session);
-    }, 5_000);
+    if (this.followAfterLink) {
+      // Hand the store over to a supervised sync daemon, then let the short-lived
+      // auth process go — otherwise history freezes at whatever linking fetched.
+      setTimeout(() => {
+        session.proc.kill();
+        this.onLinked(session);
+      }, 5_000);
+    }
     setTimeout(() => this.sessions.delete(session.id), 10 * 60_000);
   }
 

@@ -4,6 +4,7 @@
       "id": "demo",
       "token": "replace-me-with-32-random-bytes",
       "store": "/absolute/path/to/stores/demo",
+      "plan": "self-hosted",
       "allowSend": false
     }
   ]

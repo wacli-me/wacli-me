@@ -2,9 +2,8 @@
 <div class="hero">
     <h1 class="page">Tool reference</h1>
     <p class="lede">
-      Seventeen tools: thirteen read-only, four behind the write switch. Each returns JSON as text
-      content, close to what the underlying CLI produced — the only reshaping is unwrapping its
-      result envelope so a failed call arrives as a real error.
+      Eighteen tools: thirteen read-only, five behind the write switch. Most return JSON as text;
+      image tools use MCP image content so a client can display the actual photo.
     </p>
   </div>
 
@@ -24,6 +23,7 @@
       <div class="row"><code>history_coverage</code><span>How far back history reaches per chat</span></div>
       <div class="row"><code>get_media</code><span>Fetch one message's attachment</span></div>
       <div class="row write"><code>send_message</code><span>Send text, including to a number never messaged before</span></div>
+      <div class="row write"><code>send_image</code><span>Send a JPEG, PNG, WebP, or GIF image</span></div>
       <div class="row write"><code>check_numbers_on_whatsapp</code><span>Is this number on WhatsApp at all?</span></div>
       <div class="row write"><code>react_to_message</code><span>Emoji reaction, visible to the chat</span></div>
       <div class="row write"><code>mark_chat_read</code><span>Clear unread, sends read receipts</span></div>
@@ -180,7 +180,7 @@
     <div class="api">
       <h3>get_media</h3>
       <p class="sig">get_media(chat, message_id) → image | object</p>
-      <p>Downloads the attachment of one message on demand. Images up to 5 MB come back as image content, so a model can look at the photo of the parking permit instead of guessing from the filename. Other types return their media type and size.</p>
+      <p>Downloads the attachment of one message on demand. Images up to 5 MB come back as MCP image content, so a model can inspect the actual photo. Other types return their media type and size.</p>
       <table class="params">
         <tr><th>Argument</th><th>Type</th><th>Meaning</th></tr>
         <tr><td>chat</td><td>string</td><td>Chat JID, required</td></tr>
@@ -191,7 +191,22 @@
 
     <h2 style="margin:44px 0 20px">Write access</h2>
     <div class="note" style="margin-bottom:22px">
-      <p><strong>These four exist only for accounts with the write switch on.</strong> For everyone else they are not registered, so <code>tools/list</code> does not mention them. Three of them change what other people see — that is the line, not whether a call technically writes to your own store.</p>
+      <p><strong>These five exist only for accounts with the write switch on.</strong> For everyone else they are not registered, so <code>tools/list</code> does not mention them. Four change what other people see — that is the line, not whether a call technically writes to your own store.</p>
+    </div>
+
+    <div class="api">
+      <h3>send_image <span class="pill soon">write access</span></h3>
+      <p class="sig">send_image(to, image_base64? | image_url?, mime_type?, caption?) → object</p>
+      <p>Sends a JPEG, PNG, WebP, or GIF as an image message, up to 5 MB. Supply raw base64 with <code>mime_type</code>, a <code>data:image/...;base64</code> URL, or a public HTTPS image URL. The image bytes are checked against their actual format before sending.</p>
+      <table class="params">
+        <tr><th>Argument</th><th>Type</th><th>Meaning</th></tr>
+        <tr><td>to</td><td>string</td><td>JID, phone number, or exact chat name</td></tr>
+        <tr><td>image_base64</td><td>string?</td><td>Base64 image bytes or a base64 data URL; provide this or image_url</td></tr>
+        <tr><td>image_url</td><td>string?</td><td>Public HTTPS URL; provide this or image_base64</td></tr>
+        <tr><td>mime_type</td><td>string?</td><td>Required for raw base64; optional for URLs; one of image/jpeg, image/png, image/webp, image/gif</td></tr>
+        <tr><td>caption</td><td>string?</td><td>Optional caption, up to 1024 characters</td></tr>
+      </table>
+      <p class="hint">For base64, the client must include the image bytes in the MCP tool call. A chat attachment is not automatically available to the server; use an image URL or provide its bytes.</p>
     </div>
 
     <div class="api">
